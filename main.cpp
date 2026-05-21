@@ -99,6 +99,7 @@ HandConnection find_hand(std::vector<std::string>& ports, uint8_t slave_id, cons
 void update_finger(DeviceHandler* handle, uint8_t slave_id,
                    unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorCmds_>* lowcmd,
                    unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* lowstate,
+		   unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* touchstate,
                    const std::string& ns) {
     uint16_t positions[6], speeds[6];
 
@@ -125,6 +126,18 @@ void update_finger(DeviceHandler* handle, uint8_t slave_id,
     }
     lowstate->unlockAndPublish();
     free_motor_status_data(status);
+
+    CTouchFingerData* td = stark_get_touch_status(handle, slave_id);
+    if (td) {
+	    for (int i = 0; i < 5; ++i) {
+		    touchstate->msg_.states()[i].q()       = td->items[i].normal_force1 / 1000.f;
+		    touchstate->msg_.states()[i].dq()      = td->items[i].tangential_force1 / 1000.f;
+		    touchstate->msg_.states()[i].ddq()     = td->items[i].tangential_direction1 / 1000.f;
+		    touchstate->msg_.states()[i].tau_est() = td->items[i].self_proximity1 / 1000.f;
+	    }
+	    touchstate->unlockAndPublish();
+	    free_touch_finger_data(td);
+    }
 }
 
 // Worker thread for each hand
@@ -139,9 +152,12 @@ void hand_worker(DeviceHandler* handle, uint8_t slave_id, const std::string& ns)
     auto lowstate = std::make_unique<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>>("rt/brainco/" + ns + "/state");
     lowstate->msg_.states().resize(6);
 
+    auto touchstate = std::make_unique<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>>("rt/brainco/" + ns + "/touch");
+   touchstate->msg_.states().resize(5); 
+
     while (running) {
         auto start_time = std::chrono::high_resolution_clock::now();
-        update_finger(handle, slave_id, lowcmd.get(), lowstate.get(), ns);
+        update_finger(handle, slave_id, lowcmd.get(), lowstate.get(), touchstate.get(), ns);
         auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start_time).count();
         int sleep_us = 10000 - static_cast<int>(elapsed_us); // 100Hz
         if (sleep_us > 0) std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
